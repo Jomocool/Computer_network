@@ -617,3 +617,749 @@ Linux网络协议栈的样子类似于TCP/IP的四层结构：
 
 ksoftirqd线程会从Ring Buffer中获取一个数据帧，用sk_buff表示，从而可以作为一个网络包交给网络协议栈进行逐层处理，即封装各种协议栈帧头
 
+> 网络协议栈
+
+首先，进入网络接口层，在这一层检查报文的合法性，如果不合法就丢弃，合法则会找出该网络包的上层协议类型，比如是IPv4还是IPv6，接着再去掉帧头和帧尾，然后交给网络层。
+
+到了网络层，则取出IP包，判断网络包的下一步走向，比如是交给上层处理还是转发出去。当确认这个网络包要发送给本机后，就会从IP头里看看上一层协议的类型是TCP还是UDP，接着去掉IP头，然后交给传输层
+
+传输层取出TCP头或UDP头，根据四元组[源IP、源端口、目的IP、目的端口]作为标识，找出对应的Socket，并把数据放到Socket的接收缓冲区。
+
+最后，应用程序调用Socket接口，将内核的Socket接收缓冲区的数据拷贝到应用层的缓冲区，然后唤醒用户进程。
+
+![image-20230601165046340](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230601165046340.png)
+
+左边是网络包接受过程，右边是网络包发送过程
+
+
+
+**Linux发送网络包的流程**
+
+首先，应用程序调用Socket发送数据包的接口，由于是系统调用，所以会从用户态陷入到内核态中的Socket层，内核会申请一个内核态的sk_buff内存，将用户待发送的数据拷贝到sk_buff内存，并将其加入到发送缓冲区
+
+接下来，网络协议栈从Socket发送缓冲区中取出sk_buff，并按照TCP/IP协议栈从上到下逐层处理
+
+如果使用的是TCP传输协议发送数据，那么先拷贝一个新的sk_buff副本，因为sk_buff在后续调用网络层，最后到达网卡发送完成的时候会被释放掉。而TCP协议是支持丢失重传的，在收到对方ACK之前，这个sk_buff不能被删除。所以内核的做法就是每次调用网卡发送的时候，实际上传递出去的是sk_buff的一个拷贝，等收到ACK再真正删除。
+
+接着，对sk_buff填充TCP头。sk_buff可以表示各个层的数据包，在应用层数据包叫data，在TCP层称为segment，在IP层叫作packet，在数据链路层叫frame
+
+为什么全部数据包只用一个结构体描述？
+因为协议栈采用的是分层结构，上层向下层传递时需要增加包头，下层向上层传递数据时又需要去掉包头，如果每一层都用一个结构体，层之间的传递就需要多次拷贝，大大降低CPU效率。于是，为了在层之间传递数据时不发生拷贝，只用sk_buff一个结构体来描述所有的网络包，只需要通过调整sk_buff中data的指针，比如：
+
+- 当接收报文时，从网卡驱动开始，通过协议栈层层往上传送数据报，通过增加skb->data的值，来逐步剥离协议首部，即包头
+- 当发送报文时，创建sk_buff结构体，数据缓存区的头部预留足够的空间，用来填充各层首部，在经过各下层协议时，通过减少skb->data的值来增加协议首部
+
+![image-20230601170324772](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230601170324772.png)
+
+至此，传输层的工作都完成了。
+
+然后交给网络层，在网络层中会做这些工作：选取路由（确认下一跳的IP）、填充IP头，netfilter过滤，对超过MTU大小的数据包进行分片。处理完这些工作后交给网络接口层处理。
+
+网络接口层会通过ARP协议获得下一跳的MAC地址，然后对sk_buff填充帧头和帧尾，接着将sk_buff放到网卡的发送队列中。
+
+这些准备工作做好后，会触发 软中断 告诉网卡驱动程序，这里有新的网络包需要发送，驱动程序会从发送队列中读取sk_buff，将这个sk_buff挂到RingBuffer中，接着将sk_buff数据映射到网卡可访问的内存DMA区域，最后触发真实的发送
+
+当数据发送完成之后，工作并未结束，因为内存还没有清理干净。发送完成时，网卡设备会触发一个硬中断来释放内存，主要是释放sk_buff内存和清理RIngBuffer内存。
+
+最后，当收到该TCP报文的ACK应答时，传输层就会释放原始的sk_buff。
+
+> 发送网络数据的时候，涉及几次内存拷贝操作？
+
+第一次，调用发送数据的系统调用时，内核会申请一个内核态的sk_buff内存，将用户待发送的数据拷贝到sk_buff内存，并将其加入到发送缓冲区
+
+第二次，在使用TCP传输协议的情况下，从传输层进入网络层的时候，每一个sk_buff都会被克隆一个新的副本出来。副本sk_buff会被送往网络层，等它发送完的时候就会释放掉，然后原始的sk_buff还保留在传输层，目的是为了实现TCP的可靠传输，等收到这个数据包的ACK时，才会释放原始的sk_buff
+
+第三次，当IP层发现sk_buff大于MTU时才需要进行拷贝。会再次申请额外的sk_buff，并将原来的sk_buff拷贝为多个小的sk_buff
+
+
+
+## 二、HTTP篇
+
+### 2.1 HTTP常见面试题
+
+#### 2.1.1 HTTP基本概念
+
+HTTP是超文本传输协议，也就是HyperText Transfer Protocol
+
+HTTP的名字超文本传输协议可以拆分成三个部分：
+
+- 超文本
+- 传输
+- 协议
+
+1. 协议：
+
+   HTTP协议是一个用在计算机世界里的协议，它使用计算机能够理解的语言确立了一种计算机之间的交流通信的规范（两个以上的参与者），以及相关的各种控制和错误处理方式（行为约定和规范）
+
+2. 传输：
+
+   HTTP协议是一个双向协议，我们上网冲浪时，浏览器是请求方A，百度网站就是应答方B。双方约定用HTTP协议来通信，于是浏览器把请求数据发送给网站，网站再把一些数据返回给浏览器，最后由浏览器渲染在屏幕，就可以看到图片、视频了。
+
+   ![image-20230607000036164](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230607000036164.png)
+
+   数据虽然是在A和B之间传输，但允许中间有中转或接力
+
+   在HTTP里，需要中间人遵从HTTP协议，只要不打扰基本的数据传输，就可以添加任意额外的东西。
+
+   HTTP是一个在计算机世界里专门用来在两点之间传输数据的约定和规范
+
+3. 超文本：
+
+   HTTP传输的内容是超文本
+
+   互联网早期的时候只是简单的字符文字，但现在文本的涵义已经可以扩展为图片、视频、压缩包等，在HTTP眼里这些都算作文本
+
+   超文本就是超越了普通文本的文本，它是文字、图片、视频等的混合体，最关键有超链接，能从一个文本跳转到另外一个超文本
+
+   HTML就是最常见的超文本了，它本身只是纯文字文件，但内部用很多标签定义了图片、视频等的链接，再经过浏览器的解释，呈现给我们就是一个文字、有画面的网页了
+
+**HTTP**是一个在计算机世界里专门在**两点**之间**传输**文字、图片、音频、视频等**超文本**数据的**约定和规范**
+
+> 那HTTP是用于从互联网服务器传输超文本到本地浏览器的协议，这种说法正确吗？
+
+这种说法是不正确的，因为也可以是 服务器<——>服务器，所以采用两点之间的描述会更准确
+
+
+
+**HTTP常见的状态码有哪些？**
+
+![image-20230607133210184](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230607133210184.png)
+
+- **1xx**类状态码属于提示信息，是协议处理中的一种中间代码，实际用到的比较少
+
+- 2xx类状态码表示服务器成功处理了客户端的请求，也是我们最愿意看到的状态
+
+  - **200OK**是最常见的成功状态码，表示一切正常。如果是非HEAD请求，服务器返回的响应头都会有body数据
+  - **204 No Content**也是常见的成功状态码，与200OK基本相同，但响应头没有body数据
+  - **206 Partial Content**是用于HTTP分块下载或断点续传，表示响应返回的body数据并不是资源的全部，而是其中一部分，也是服务器处理成功的状态
+
+- **3xx**类状态码表示客户端请求的资源发生了变动，需要客户端用新的URL重新发送请求获取资源，也就是**重定向**
+
+  - **301 Moved Permanently**表示永久重定向，说明请求的资源已经不存爱了，需改用新的 URL再次访问
+
+  - **302 Found**表示临时重定向，说明请求的资源还在，但暂时需要另一个URL来访问
+
+    301和302斗都会在响应头里使用字段Location，指明后续要跳转的URL，浏览器会自动重定向新的URL
+
+  - **304 Not Modified**不具有跳转的含义，表示资源未修改，重定向已存在的缓冲文件，也称缓存重定向，也就是告诉客户端可以继续使用缓存资源，用于缓存控制
+
+- **4xx**类状态码表示客户端发送的报文有误，服务器无法处理，也就是错误码的含义
+
+  - **400 Bad Request**表示客户端请求的报文有错误，但只是个笼统的错误
+  - **403 Forbidden**表示服务器进制访问资源，并不是客户端的请求出错
+  - **404 Not Found**表示请求的资源在服务器上不存在或未找到，所以无法提供给客户端
+
+- **5xx**类状态码表示客户端请求报文正确，但是服务器处理时内部发生了错误，属于服务端的错误码
+
+  - **500 Internal Server Error**与400类型，是个笼统通用的错误码，服务器发生了什么错误，我们并不知道
+  - **501 Not Implemened**表示客户端请求的功能还不支持，类似“即将开业，敬请期待”的意思
+  - **502 Bad Gateway**通常是服务器作为网关或代理时返回的错误码，表示服务器自身工作正常，访问后端服务器发生了错误
+  - **503 Service Unavailable**表示服务器当前很忙，暂时无法响应客户端，类似“网络服务正忙，请稍后重试”的意思
+
+
+
+**HTTP常见字段有哪些？**
+
+- Host字段：客户端发送请求时，用来指定服务器的域名
+
+  ![](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230607222854912.png)
+
+  有了Host字段，就可以将请求发往同一台服务器上的不同网站
+
+- Cotent-Length字段
+
+  服务器在返回数据时，会有Cotent-Length字段，表明本次回应的数据长度
+
+  ![image-20230607223258960](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230607223258960.png)
+
+  上面是告诉浏览器，本次服务器回应的数据长度是1000个字节，后面的字节就属于下一个回应了
+
+  HTTP是基于TCP传输协议进行通信的，而使用了TCP传输协议，就会存在一个“粘包”问题，HTTP协议通过设置回车符、换行符作为HTTP header的边界，通过Cotent-Length字段作为HTTP body的边界，这两个方式都是为了解决“粘包”的问题。
+
+- Connection字段
+
+  Connection字段最常用于客户端要求服务器使用 HTTP长连接 机制，以便其他请求复用
+
+  ![image-20230607225053329](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230607225053329.png)
+
+  HTTP长连接的特点是，只要任意一段没有明确提出断开连接，则保持TCP连接状态
+
+  ![HTTP 长连接](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/d2b20d1cc03936332adb2a68512eb167-20230309231005893.png)
+
+  HTTP/1.1版本的默认连接都是长连接，但为了兼容老版本的HTTP，需要指定Connection首部字段的值为Keep-Alive
+
+  ```
+  Connection:Keep-Alive
+  ```
+
+  开启了HTTP Keep-Alive机制后，连接就不会中断，而是保持连接。当客户端发送另一个请求时，它会使用同一个连接，一直持续到客户端或服务端提出断开连接
+
+- Content-Type字段
+
+  Content-Type字段用于服务器回应时，告诉客户端，本次数据是什么格式
+
+  ```
+  Content-Type:text/html;Charset=utf-8
+  ```
+
+  上面的类型表明，发送的是网页，而且编码是UTF-8
+
+  客户端请求时，可以使用Accept字段表明自己可以接受哪些数据格式
+
+  ```
+  Accept:*/*
+  ```
+
+- Content-Encoding字段
+
+  Content-Encoding字段说明数据的压缩方法。表示服务器返回的数据使用了什么压缩格式
+
+  ![image-20230607231446740](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230607231446740.png)
+
+  ```
+  Content-Encoding:gzip
+  ```
+
+  上面表示服务器返回的数据采用了gzip方式压缩，告知客户端需要用此方式解压
+
+  客户端在请求时，用Accept-Encoding字段说明自己可以接受哪些压缩方法
+
+  ```
+  Accept-Encoding:gzip,deflate
+  ```
+
+
+
+#### 2.1.2 GET与POST
+
+****
+
+**GET和POST有什么区别？**
+
+根据RFC规范，**GET的语义是从服务器获取指定的资源**，这个资源可以是静态的文本、页面、图片视频等。GET请求的参数位置一般是写在URL中，URL规定只能支持ASCII，所以GET请求的参数只允许ASCII字符，而且浏览器会对URL的长度有限制（HTTP协议本身对URL长度并没有做任何规定）
+
+
+
+根据RFC规范，**POST的语义是根据请求负荷（报文body）对指定的资源做出处理**，具体的处理方式可以视资源类型而不同。POST请求携带数据的位置一般是写在报文body中，body中的数据可以是任意格式的数据，只要客户端与服务端协商好即可，而且浏览器不会对body大小做限制。
+
+比如，在文章底部，敲入留言后点击提交，浏览器就会执行一次POST请求，把留言文字放进了报文body里，然后拼接好POST请求头，通过TCP协议发送给服务器。
+
+
+
+**GET和POST方法都是安全和幂等的吗？**
+
+安全和幂等的概念：
+
+- 安全：在HTTP协议里，所谓的安全是指请求方法不会破坏服务器上的资源
+- 幂等：所谓的幂等，意思是多次执行相同的操作，结果都是相同的
+
+从RFC规范定义的语义来看：
+
+- **GET方法就是安全且幂等的**，因为它是只读操作，无论操作多少次，服务器上的数据都是安全的，且每次结果都是相同的。所以，**可以对GET请求的数据做缓存，这个缓存可以做到浏览器本身上（彻底避免浏览器发请求），也可以做到代理上（如Nginx），而且在浏览器中GET请求可以保存为书签**
+- **POST**因为是新增或提交数据的操作，会修改服务器上的资源，所以是不安全的，且多次提交数据就会创建多个资源，所以不是幂等的。所以，**浏览器一般不会缓存POST请求，也不能把POST请求保存为书签**
+
+
+
+**总结：**
+
+GET是安全、幂等的
+
+POST是不安全且不幂等的
+
+
+
+上面是根据RFC规范定义的语义分析的
+
+但在实际过程中，开发者不一定会按照RFC规范定义的语义来实现GET和POST方法，比如：
+
+- 可以用GET方法实现新增或删除数据的请求，这样实现的GET方法自然就不是安全和幂等。 
+- 可以用POST方法实现查询数据的请求，这样实现的POST方法自然就是安全和幂等。
+
+HTTP传输的内容都是明文的，要避免传输过程中数据被窃取，就要使用HTTPS协议，这样所有的HTTP的数据都会被加密传输
+
+
+
+> GET请求可以带body吗？
+
+RFC规范并没有规定GET请求不能带body的。理论上，任何请求都可以带body，。只是因为RFC规范定义的GET请求是获取资源，所以根据这个语义不需要用到body。
+
+另外，URL中的查询参数也不是GET所独有的，POST请求的URL中也可以有参数。
+
+
+
+#### 2.1.3 HTTP缓存技术
+
+**HTTP缓存有哪些实现方式？**
+
+对于一些具有重复性的HTTP请求，比如每次得到的数据都是一样的，我们可以把这对 请求-响应 的数据都缓存在本地，那么下次就直接读取本地的数据，不必再通过网络获取服务器的响应了，这样的话HTTP/1.1的性能肯定肉眼可见的提升。
+
+
+
+所以，避免发送HTTP请求的方法就是通过缓存技术，HTTP设计者早在之前就考虑到了这点，因此HTTP协议的头部有不少是针对缓存的字段
+
+
+
+HTTP缓存有两种实现方式，分别是强制缓存和协商缓存
+
+**什么是强制缓存？**
+
+强制缓存指的是只要浏览器判断缓存没有过期，则直接使用浏览器的本地缓存，决定是否使用缓存的主动性在浏览器这边
+
+![image-20230711114031927](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711114031927.png)
+
+如果HTTP相应头部同时有Cache-control和Expires字段的话，Cache-control的优先级高于Expires
+
+
+
+Cache-control选项更多一些，设置更加精细，所以建议使用Cache-control来实现强缓。具体的实现流程如下：
+
+- 当浏览器第一次请求访问服务器资源时，服务器会在返回这个资源的同时，在Response头部加上Cache-control，Cache-control中设置了过期时间大小
+- 浏览器再次请求访问服务器中的资源时，会先通过请求资源的时间与Cache-control中设置的过期时间大小，来计算该资源是否过期，如果没有，则使用该缓存，否则重新请求服务器
+- 服务器再次收到请求后，会再次更新Response头部的Cache-control
+
+
+
+**什么是协商缓存？**
+
+当我们在浏览器使用开发者工具的时候，可能会看到某些请求的响应码是304，这个是告诉浏览器可以使用本地缓存的资源，通常这种通过服务端告知客户端是否可以使用缓存的方式被称为协商缓存。
+
+![image-20230711120114319](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711120114319.png)
+
+协商缓存可以基于两种头部来实现。
+
+第一种：请求头部中的If-Modified-Since字段与响应头部中的Last-Modified字段实现，这两个字段的意思是：
+
+- 响应头部中的Last-Modified：表示这个响应资源最后修改时间
+- 请求头部中的If-Modified-Since：当资源过期了，发现响应头部中具有Last-Modified声明，则再次发起请求的时候带上Last-Modified的时间，服务器收到请求后发现有If-Modified-Since则与被请求资源的最后修改时间（Last-Modified）对比，如果最后修改时间较晚，说明资源又被改过，则返回最新资源，HTTP 200 OK；如果最后修改时间较早，说明资源无新修改，响应HTTP 304 走缓存
+
+第二种：请求头部中的If-None-Match字段与响应头部中的ETag字段，这两个字段的意思是：
+
+- 响应头部中Etag：唯一标识响应资源
+- 请求头部中的If-None-Match：当资源过期时，浏览器发现响应头里有Etag，则再次向服务器发起请求时，会将请求头If-None-Match值设置为Etag的值，服务器收到请求后进行比对，如果资源没有变化返回304，如果资源变化了返回200
+
+第一种实现方式是基于时间实现的，第二种实现方式是基于一个唯一标识实现的，相对来说后者可以更加准确地判断文件是否被修改，避免由于时间篡改导致的不可靠问题
+
+
+
+如果在第一次请求资源的时候，服务端返回的HTTP相应头部同时有Etag和Last-Modified字段，那么客户端再下一次请求的时候，如果带上Etag和Last-Modified字段信息给服务端，**这时Etag的优先级更高**，也就是服务端会判断Etag是否变化了，如果Etag有变化就不用再判断Last-Modified了，如果Etag没有变化，就再看Last-Modified
+
+
+
+**为什么ETag的优先级更高？**
+
+这是因为ETag主要能解决Last-Modified几个比较难以解决的问题：
+
+1. 在没有修改文件内容情况下文件的修改时间可能也会改变，这会导致客户端认为这文件被改动了，从而重新请求
+2. 可能有些文件是在秒级以为修改的，If-Modified-Since能检查到的粒度是秒级的，使用ETag就能够保证这种需求下1秒内能刷新多次
+3. 有些服务器不能精确获取文件的最后修改时间
+
+注意，协商缓存这两个字段都需要配合强制缓存中Cache-control来使用，只有在未能命中强制缓存的时候，才能发起带有协商缓存字段的请求
+
+
+
+强制缓存和协商缓存的工作流程：
+
+![image-20230711121431797](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711121431797.png)
+
+
+
+当使用ETag字段实现的协商缓存的过程：
+
+- 当浏览器第一次请求访问服务器资源时，服务器会在返回这个资源的同时，在Response头部加上ETag唯一标识，这个唯一标识的值是根据当前请求的资源生成的
+- 当浏览器再次请求访问服务器中的该资源时，首先会检查强制缓存是否过期
+  - 如果没有过期，则直接使用本地缓存
+  - 如果缓存过期了，会在Request头部加上If-None-Match字段，该字段的值就是ETag唯一标识
+- 服务器再次收到请求后，会根据请求中的If-None-Match值域当前请求的资源生成的唯一标识进行比较
+  - 如果值相等，则返回304 Not Modified，不会返回资源
+  - 如果不想打，则返回200状态码和返回资源，并在Response头部加上新的ETag唯一标识
+- 如果浏览器收到304的请求响应状态码，则会从本地缓存中加载资源，否则更新资源
+
+
+
+#### 2.1.4 HTTP特性
+
+到目前为止，HTTP常见的版本有HTTP/1.1，HTTP/2.0，HTTP/3.0，不同版本的HTTP特性不一样
+
+
+
+**HTTP/1.1的优点有哪些？**
+
+HTTP最突出的优点是 简单、灵活和易于扩展、应用广泛和跨平台
+
+1. 简单
+
+   HTTP基本的保温格式就是header+body，头部信息也是key-value简单文本的形式，易于理解，降低了学习和使用的门槛
+
+2. 灵活和易于扩展
+
+   HTTP协议里的各类请求方法、URI/URL、状态码、头字段等每个组成要求都没有固定死，都允许开发人员自定义和扩充
+
+   同时HTTP由于是工作在应用层（OSI第七层），则它下层可以随意变化，比如：
+
+   - HTTPS就是在HTTP与TCP层之间增加了SSL/TLS安全传输层
+   - HTTP/1.1和HTTP/2.0传输协议使用的是TCP协议，而到了HTTP/3.0传输协议改用了UDP协议
+
+3. 应用广泛和跨平台
+
+   互联网发展至今，HTTP的应用范围十分广泛，从台式机的浏览器到手机上的各种APP，各种HTTP的应用遍地开花，同时具有跨平台的优越性
+
+
+
+**HTTP/1.1的缺点有哪些？**
+
+HTTP协议里有优缺点一体的双刃剑，分别是 无状态、明文传输，同时还有一大缺点 不安全
+
+1. 无状态双刃剑
+
+   无状态的好处，因为服务器不会去记忆HTTP的状态，所以不需要额外的资源来记录状态信息，这能减轻服务器的负担，能够把更多的CPU和内存用来对外提供服务
+
+   无状态的坏处，既然服务器没有记忆能力，它在完成有关联性的操作时会非常麻烦
+
+   例如登录->添加购物车->下单->结算->支付，这系列操作都要知道用户的身份才行。但服务器不知道这些请求是有关联的，每次都要问一遍身份信息
+
+   这样每操作一次，都要验证信息，购物体验大打折扣
+
+   对于无状态的问题，解决方案有很多种，其中比较简单的方式是用Cookie技术。
+
+   Cookie通过在请求和响应报文中写入Cookie信息来控制客户端的状态
+
+   相当于，在客户端第一次请求后，服务器会下发一个装有客户信息的小贴纸，后续客户端请求服务器的时候，带上小贴纸，服务器就能认得了
+
+   ![image-20230711154530252](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711154530252.png)
+
+2. 明文传输双刃剑
+
+   明文意味着在传输过程中的信息，是可方便阅读的，比如Wireshark抓包都可以直接肉眼查看，为调试工作带来了极大的便利性
+
+   但是正是这样，HTTP的所有信息都暴露在外，相当于信息裸奔。在传输的漫长的过程中，信息的内容毫无隐私可言，很容易就能被窃取，如果里面有隐私信息，就十分危险。
+
+3. 不安全
+
+   HTTP比较严重的确定就是不安全：
+
+   - 通信使用明文（不加密），内容可能会被窃听。比如，账号信息容易泄露
+   - 不验证通信方的身份，因此有可能遭遇伪装，比如，访问假的淘宝、拼多多
+   - 无法证明报文的完整性，所以有可能已遭篡改。比如，网页上植入垃圾广告，视觉污染
+
+
+
+HTTP的安全问题，可以用HTTPS的方式解决，也就是通过引入SSL/TLS层，使得在安全上达到了极致
+
+
+
+**HTTP/1.1的性能如何？**
+
+HTTP协议里是基于TCP/IP，并且使用了 请求-应答 的通信模式，所以性能的关键在这两点里
+
+1. 长连接
+
+   早期HTTP/1.0性能上的一个很大的问题，就是每发起一个请求，都要新建一次TCP连接（三次握手），而且是串行请求，做了无谓的TCP连接建立和断开，增加了通信开销
+
+   为了解决上述TCP连接问题，HTTP/1.1提出了长连接的通信方式，也叫持久连接。这种方式的好处在于减少了TCP连接的重复建立和断开所造成的额外开销，减轻了服务端的负载
+
+   持久连接的特点是，只要任意一端没有明确提出断开连接，则保持TCP连接状态
+
+   ![image-20230711160221527](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711160221527.png)
+
+   当然，如果某个HTTP长连接超过一定时间没有任何数据交互，服务端就会主动断开这个连接
+
+2. 管道网络传输
+
+   HTTP/1.1采用了长连接的方式，这使得管道（pipeline）网络传输成为了可能
+
+   即可在同一个TCP连接里面，客户端可以发起多个请求，只要第一个请求发出去了，不必等其回来，就可以发第二个请求出去，可以减少整体的响应时间
+
+   ![image-20230711163847323](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711163847323.png)
+
+   实际上HTTP/1.1管道化技术不是默认开启，而且浏览器基本都没有支持。有这个功能但是没有被使用
+
+3. 对头阻塞
+
+   **请求-应答的模式会造成HTTP的性能问题，为什么呢？**
+
+   因为当顺序发送的请求序列中的一个请求因为某种原因被阻塞时，在后面排队的所有请求也一同被阻塞了，会招致客户端一直请求不到数据，这也就是 队头阻塞
+
+   ![image-20230711164217737](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711164217737.png)
+
+
+
+#### 2.1.5 HTTP与HTTPS
+
+**HTTP与HTTPS有哪些区别？**
+
+- HTTP是超文本传输协议，信息是明文传输，存在安全风险的问题。HTTPS则解决HTTP不安全的缺陷，在TCP和HTTP网络层之间加入了SSL/TLS安全协议，使得报文能够加密传输。
+- HTTP连接建立相对简单，TCP三次握手之后便可进行HTTP的报文传输。而HTTPS在TCP三次握手之后，还需进行SSL/TLS的握手过程，才可进入加密报文传输
+- 两者的默认端口不一样，HTTP默认端口号是80，HTTPS默认端口号是443
+- HTTPS协议需要向CA（证书权威机构）申请数字证书，来保证服务器的身份是可信的
+
+
+
+**HTTPS解决了HTTP的哪些问题？**
+
+HTTP由于是明文传输，所以安全上存在以下三个风险：
+
+- 窃听风险：比如通信链路上可以获取通信内容
+- 篡改风险：比如强制植入垃圾广告
+- 冒充风险：比如冒充淘宝网站
+
+![image-20230711210706199](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711210706199.png)
+
+HTTPS在HTTP与TCP层之间加入了SSL/TLS协议，可以很好的解决了上述的风险：
+
+- 信息加密：交互信息无法被窃取，但你的号会因为自身忘记而没
+- 校验机制：无法篡改通信内容，篡改了就不能正常显示
+- 身份证书：证明淘宝是真的淘宝网
+
+
+
+> HTTPS是如何解决上面的三个风险的？
+
+- 混合加密的方式实现信息的机密性，解决了窃听的风险
+- 摘要算法的方式来实现完整性，它能够为数据生成独一无二的“指纹”，指纹用于校验数据的完整性，解决了篡改的风险
+- 将服务器公钥放入到数字证书中，解决了冒充的风险
+
+
+
+1. 混合加密
+
+   ![image-20230711211645615](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711211645615.png)
+
+   HTTPS采用的是对称加密和非对称加密的结合的混合加密方式：
+
+   - 在通信建立前采用非对称加密的方式交换会话秘钥，后续就不再使用非对称加密
+   - 在通信过程中全部使用对称加密的会话秘钥的方式加密明文数据
+
+   采用混合加密的原因：
+
+   - 对称加密只使用一个密钥，运算速度快，密钥必须保密，无法做到安全的密钥交换
+   - 非对称加密使用两个密钥，公钥和私钥，公钥可以任意分发而私钥保密，解决了密钥交换问题但是速度慢
+
+2. 摘要算法+数字签名
+
+   ![image-20230711212052243](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711212052243.png)
+
+   ![image-20230711212305899](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711212305899.png)
+
+   ![image-20230711212511270](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711212511270.png)
+
+   私钥由服务端保管，然后服务端会向客户端颁发对应的公钥。如果客户端收到的信息，能被公钥解密，说明该消息是由服务器发送的。
+
+   ![image-20230711212639594](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711212639594.png)
+
+3. 数字证书
+
+   ![image-20230711212730155](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711212730155.png)
+
+   ![image-20230711212852077](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711212852077.png)
+
+   ![image-20230711212952728](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711212952728.png)
+
+
+
+**HTTPS是如何建立连接的？期间交互了什么？**
+
+SSL/TLS协议基本流程：
+
+- 客户端向服务器索要并验证服务器的公钥
+- 双方协商生产会话秘钥
+- 双方采用会话秘钥进行加密通信
+
+前两步也就是SSL/TLS的建立过程，也就是TLS握手阶段，设计四次通信，使用不同的密钥交换算法，TLS握手流程也会不一样，现在常用的密钥交换算法有两种：RSA算法和ECDHE算法
+
+
+
+基于RSA算法的TLS握手过程，如下图：
+
+![image-20230711213903520](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711213903520.png)
+
+![image-20230711213927345](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711213927345.png)
+
+
+
+TLS协议建立的详细流程：
+
+![image-20230711214033405](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214033405.png)
+
+![image-20230711214127033](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214127033.png)
+
+![image-20230711214153668](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214153668.png)
+
+![image-20230711214253972](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214253972.png)
+
+![image-20230711214348287](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214348287.png)
+
+不过，基于RSA算法的HTTPS存在前向安全的问题：如果服务端的私钥泄露了，过去被第三方截获的所有TLS通讯密文都会被破解
+
+为了解决这个问题，后面就出现了ECDHE秘钥协商算法，我们现在大多数网站使用的正是ECDHE秘钥协商算法
+
+
+
+> 客户端校验数字证书的流程是怎样的？
+
+![image-20230711214612957](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214612957.png)
+
+CA签发证书的过程，如上图左边部分：
+
+![image-20230711214727392](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214727392.png)
+
+客户端校验服务端的数字证书的过程，如上图右边部分：
+
+![image-20230711214806377](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214806377.png)
+
+
+
+![image-20230711214858900](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214858900.png)
+
+![image-20230711214933629](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214933629.png)
+
+![image-20230711214945988](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711214945988.png)
+
+![image-20230711215031400](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711215031400.png)
+
+证书信任链：
+
+![image-20230711215108477](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711215108477.png)
+
+操作系统里一般都会内置一些根证书
+
+![image-20230711215201934](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711215201934.png)
+
+
+
+为什么需要证书链这么麻烦的流程？Root CA为什么不直接颁发证书，而是要搞这么多中间层级呢？
+
+这是为了确保根证书的绝对安全性，将根证书隔离地越严格越好，不然根证书如果失守了，整个信任链都会有问题。（不要把鸡蛋都放在同一个篮子里）
+
+
+
+**HTTPS的应用数据是如何保证完整性的？**
+
+TLS在实现上分为握手协议和记录协议两层：
+
+- TLS握手协议就是我们前面说的TLS四次握手的过程，负责协商加密算法和生成对称密钥，后续用此密钥来保护应用程序数据（即HTTP数据）
+- TLS记录协议负责保护应用程序数据并验证其完整性和来源，所以对HTTP数据加密是使用记录协议
+
+
+
+TLS记录协议主要负责消息（HTTP数据）的压缩，加密及数据的认证，过程如下图：
+
+![image-20230711215657730](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711215657730.png)
+
+具体过程如下：
+
+![image-20230711215732744](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711215732744.png)
+
+![image-20230711215740066](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711215740066.png)
+
+记录协议完成后，最终的报文数据将传递到传输控制协议（TCP）层进行传输
+
+
+
+**HTTPS一定安全可靠吗？**
+
+> 字节一面问题：客户端通过浏览器向服务端发起HTTPS请求时，被假基站转发到了一个中间人服务器，于是客户端是和中间人服务器完成了TLS握手，然后这个中间人服务器再与真正的服务器完成TLS握手。
+
+![image-20230711220107640](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711220107640.png)
+
+具体过程如下：
+
+![image-20230711220406232](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711220406232.png)
+
+![image-20230711220424646](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711220424646.png)
+
+![image-20230711220531013](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711220531013.png)
+
+![image-20230711220551462](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711220551462.png)
+
+![image-20230711220608090](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711220608090.png)
+
+
+
+> 为什么抓包工具能截取HTTPS数据？
+
+![image-20230711220746570](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711220746570.png)
+
+
+
+> 如何避免被中间人抓取数据？
+
+![image-20230711220823866](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711220823866.png)
+
+
+
+#### 2.1.6 HTTP/1.1、HTTP/2、HTTP/3演变
+
+**HTTP/1.1相比HTTP/1.0提高了什么性能？**
+
+![image-20230711221035382](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221035382.png)
+
+
+
+**HTTP/2做了什么优化？**
+
+HTTP/2协议是基于HTTPS的，所以HTTP/2的安全性也是有保障的
+
+![image-20230711221115538](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221115538.png)
+
+
+
+HTTP/2相比HTTP/1.1性能上的改进：
+
+- 头部压缩
+- 二进制格式
+- 并发传输
+- 服务器主动推送资源
+
+![image-20230711221230679](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221230679.png)
+
+![image-20230711221238031](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221238031.png)
+
+![image-20230711221255590](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221255590.png)
+
+![image-20230711221314999](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221314999.png)
+
+![image-20230711221344484](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221344484.png)
+
+![image-20230711221418545](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221418545.png)
+
+![image-20230711221523801](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221523801.png)
+
+![image-20230711221534219](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221534219.png)
+
+![image-20230711221553330](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221553330.png)
+
+![image-20230711221604803](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221604803.png)
+
+![image-20230711221618865](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221618865.png)
+
+![image-20230711221639269](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221639269.png)
+
+![image-20230711221649348](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221649348.png)
+
+![image-20230711221716368](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221716368.png)
+
+
+
+> HTTP/2有什么缺陷？
+
+![image-20230711221756505](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221756505.png)
+
+![image-20230711221922146](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711221922146.png)
+
+
+
+**HTTP/3做了哪些优化？**
+
+HTTP/3把HTTP下层的TCP协议改成了UDP
+
+![image-20230711222037983](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711222037983.png)
+
+![image-20230711222103913](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711222103913.png)
+
+![image-20230711222118741](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711222118741.png)
+
+![image-20230711222209090](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711222209090.png)
+
+![image-20230711222247637](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711222247637.png)
+
+![image-20230711222317888](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230711222317888.png)
