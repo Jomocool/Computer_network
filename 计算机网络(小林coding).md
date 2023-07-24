@@ -1513,3 +1513,111 @@ HTTP/3把HTTP下层的TCP协议改成了UDP
 
 
 
+### 2.4 HTTPS ECDHE握手解析
+
+HTTPS常用的密钥交换算法有两种，分别是RSA和ECDHE算法
+
+RSA是比较传统的密钥交换算法，不具备前向安全的性质，因此现在很少服务器使用
+
+ECDHE算法具有前向安全，所以被广泛使用
+
+
+
+#### 2.4.1 离散对数
+
+ECDHE密钥协商算法是DH算法演进过来的
+DH算法是非对称加密算法，因此它可以用于密钥交换，该算法的核心数学思想是离散对数
+
+![image-20230725003935998](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725003935998.png)
+
+
+
+#### 2.4.2 DH算法
+
+![image-20230725004153201](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725004153201.png)
+
+![image-20230725004415470](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725004415470.png)
+
+
+
+#### 2.4.3 DHE算法
+
+根据私钥生成的方式，DH算法分为两种实现：
+
+- static DH算法：已废弃
+- DHE算法：常用
+
+![image-20230725004903807](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725004903807.png)
+
+
+
+#### 2.4.4 ECDHE算法
+
+DHE算法由于计算性能不佳，因为需要做大量的乘法，为了提升DHE算法的性能，所以出现了ECDHE算法
+
+
+
+ECDHE算法是在DHE算法的基础上利用了ECC椭圆曲线特性，用更少的计算量计算出公钥，以及最终的会话密钥
+
+
+
+![image-20230725005149622](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725005149622.png)
+
+双方根据自己的私钥和对方的公钥都可以得出一个相同的值，这个值就作为它们之间的共享密钥。而第三方是很难通过这些公开的信息，比如公钥等来反推出私钥的，所以就具有安全性，因此也就不好得出共享密钥了
+
+
+
+#### 2.4.5 ECDHE握手过程
+
+![image-20230725005330863](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725005330863.png)
+
+
+
+**TLS第一次握手**
+
+客户端会首先发一个 Client Hello 消息，消息里面有客户端使用的TLS版本号、支持的密码套件列表，以及生成的随机数(Client Random)
+
+![image-20230725005722464](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725005722464.png)
+
+
+
+**TLS第二次握手**
+
+服务端收到客户端的打招呼，返回 Server Hello 消息，消息里面有服务器确认的TLS版本号，也给出了一个随机数(Server Random)，然后从客户端的密码套件列表选择了一个合适的密码套件
+
+![image-20230725005945304](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725005945304.png)
+
+TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384：
+
+- 密钥协商算法使用ECDHE
+- 签名算法使用RSA
+- 握手后的通信使用AES对称算法，密钥长度256位，分组模式是GCM
+- 摘要算法使用SHA384
+
+
+
+![image-20230725010222095](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725010222095.png)
+
+这个过程服务器做了三件事：
+
+- 选择了名为x25519的椭圆曲线，选好了椭圆曲线相当于椭圆曲线基点G也定好了，这些都会公开给客户端
+- 生成随机数作为服务端椭圆曲线的私钥，保留到本地
+- 根据基点G和私钥计算出服务端的椭圆曲线公钥，这个会公开给客户端
+
+为了保证这个椭圆曲线的公钥不被第三方篡改，服务端会用RSA签名算法给服务端的椭圆曲线公钥做个签名
+
+![image-20230725010506437](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725010506437.png)
+
+
+
+**TLS第三次握手**
+
+![image-20230725010637934](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725010637934.png)
+
+![image-20230725010709340](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725010709340.png)
+
+
+
+**TLS第四次握手**
+
+![image-20230725010808412](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725010808412.png)
