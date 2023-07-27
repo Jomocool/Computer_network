@@ -1513,6 +1513,100 @@ HTTP/3把HTTP下层的TCP协议改成了UDP
 
 
 
+### 2.3 HTTPS RSA握手解析
+
+#### 2.3.1 握手过程
+
+![image-20230727141154863](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727141154863.png)
+
+![image-20230727141300483](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727141300483.png)
+
+![image-20230727141430403](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727141430403.png)
+
+
+
+#### 2.3.2 RSA握手过程
+
+![image-20230727141625304](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727141625304.png)
+
+![image-20230727141704718](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727141704718.png)
+
+![image-20230727141722679](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727141722679.png)
+
+
+
+**TLS第一次握手**
+
+客户端首先发一个 Client Hello消息（客户端使用的TLS版本号、支持的密码套件列表、生成的随机数（这个随机数会被服务端保留，它是生成对称加密密钥的材料之一））
+
+
+
+**TLS第二次握手**
+
+服务端收到客户端的Client Hello之后，会确认TLS版本号是否支持，和从密码套件列表中选择一个密码套件，以及生成随机数
+
+接着，返回 Server Hello 消息（服务器确认的TLS版本号，随机数，从客户端的密码套件列表选择了一个合适的密码套件）
+
+![image-20230727142238939](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727142238939.png)
+
+密码套件格式：密码交换算法+签名算法+对称加密算法+摘要算法
+
+
+
+目前为止，客户端和服务端就已确认了TLS版本和使用的密码套件，并且各自生成的随机数
+
+这两个随机数是后续作为生成会话密钥的条件，会话密钥就是数据传输时，所使用的对称加密密钥
+
+
+
+然后，服务端为了证明自己的身份，发送 Server Certificate 给客户端，这个消息里含有数字证书
+
+随后，服务端发了 Server Hello Done 消息，目的是告诉客户端，已经把该给的材料交付完毕了
+
+
+
+**客户端验证证书**
+
+> 客户端怎么校验数字证书？
+
+**数字证书和CA机构**
+
+![image-20230727142704521](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727142704521.png)
+
+![image-20230727142734637](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727142734637.png)
+
+
+
+**数字证书签发和验证流程**
+
+![image-20230727142832232](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727142832232.png)
+
+
+
+**证书链**
+
+a信任b，b信任c，所以a也信任c
+
+
+
+**TLS第三次握手**
+
+![image-20230727143053116](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727143053116.png)
+
+![image-20230727143135421](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727143135421.png)
+
+
+
+**TLS第四次握手**
+
+![image-20230727143216418](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727143216418.png)
+
+
+
+#### 2.3.3 RSA算法的缺陷
+
+![image-20230727143255564](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727143255564.png)
+
 ### 2.4 HTTPS ECDHE握手解析
 
 HTTPS常用的密钥交换算法有两种，分别是RSA和ECDHE算法
@@ -1621,3 +1715,137 @@ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384：
 **TLS第四次握手**
 
 ![image-20230725010808412](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230725010808412.png)
+
+
+
+### 2.5 HTTPS如何优化
+
+由裸数据传输的HTTP协议转成加密数据传输的HTTPS协议，给应用数据套了个保护伞，提高安全性的同时也带来了性能消耗
+
+
+
+因为HTTPS相比HTTP协议多一个TLS协议握手过程，目的是为了通过非对称加密握手协商或者交换出对称加密密钥，这个过程最长可以花费掉2RTT，接着后续传输的应用数据都得使用对称加密密钥来加密/解密
+
+
+
+#### 2.5.1 分析性能损耗
+
+产生性能消耗的两个环节：
+
+- TLS协议握手过程
+- 握手后的对称加密报文传输
+
+![image-20230727181912930](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727181912930.png)
+
+
+
+#### 2.5.2 硬件优化
+
+![image-20230727182010369](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182010369.png)
+
+![image-20230727182024495](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182024495.png)
+
+
+
+#### 2.5.3 软件优化
+
+![image-20230727182118205](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182118205.png)
+
+
+
+#### 2.5.4 协议优化
+
+协议的优化就是对密钥交换过程进行优化
+
+
+
+**密钥交换算法优化**
+
+![image-20230727182229800](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182229800.png)
+
+RSA的TLS握手过程：2RTT，不具备前向安全性
+
+ECDHE的TLS握手过程：1RTT，具备前向安全性
+
+
+
+**TLS升级**
+
+![image-20230727182347518](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182347518.png)
+
+![image-20230727182436654](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182436654.png)
+
+![image-20230727182504526](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182504526.png)
+
+
+
+#### 2.5.5 证书优化
+
+对于证书的优化，可以有两个方向：
+
+- 证书传输
+- 证书验证
+
+
+
+**证书传输优化**
+
+![image-20230727182631872](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182631872.png)
+
+
+
+**证书验证优化**
+
+![image-20230727182858489](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182858489.png)
+
+
+
+**CRL**
+
+![image-20230727182921778](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727182921778.png)
+
+
+
+**OCSP**
+
+![image-20230727183031765](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727183031765.png)
+
+
+
+**OCSP Stapling**
+
+为了解决这一个网络开销，就出现了OCSP Stapling，原理是：服务器向CA周期性地查询证书状态，获得一个带有时间戳和签名的响应结果并缓存它
+
+![image-20230727183200209](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727183200209.png)
+
+
+
+#### 2.5.6 会话复用
+
+![image-20230727183250128](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727183250128.png)
+
+
+
+**Session ID**
+
+![image-20230727183617372](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727183617372.png)
+
+
+
+**Session Ticket**
+
+![image-20230727183926056](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727183926056.png)
+
+![image-20230727183952258](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727183952258.png)
+
+![image-20230727184038462](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727184038462.png)
+
+避免重放攻击的方式就是需要对会话密钥设定一个合理的过期时间
+
+
+
+**Pre-shared Key**
+
+![image-20230727184246741](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727184246741.png)
+
+![image-20230727184315021](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727184315021.png)
