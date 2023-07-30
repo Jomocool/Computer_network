@@ -1366,7 +1366,7 @@ HTTP/3把HTTP下层的TCP协议改成了UDP
 
 
 
-### 2.2 HTTP/1.1如何优化
+### 2.2 HTTP/1.1如何优化？
 
 可以从下面这三种优化思路来优化HTTP/1.1协议：
 
@@ -1718,7 +1718,7 @@ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384：
 
 
 
-### 2.5 HTTPS如何优化
+### 2.5 HTTPS如何优化？
 
 由裸数据传输的HTTP协议转成加密数据传输的HTTPS协议，给应用数据套了个保护伞，提高安全性的同时也带来了性能消耗
 
@@ -1849,3 +1849,106 @@ ECDHE的TLS握手过程：1RTT，具备前向安全性
 ![image-20230727184246741](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727184246741.png)
 
 ![image-20230727184315021](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230727184315021.png)
+
+
+
+### 2.6 HTTP/2牛逼在哪？
+
+#### 2.6.1 HTTP/1.1协议的性能问题
+
+对HTTP/1.1协议优化的手段只是在“外部”做优化，`而一些关键的地方，比如请求-响应模型、头部巨大且重复、并发连接耗时、服务器不能主动推送等，要改变这些必须重新设计HTTP协议，于是HTTP/2就出来了`
+
+
+
+#### 2.6.2 兼容HTTP/1.1
+
+> HTTP/2是怎么做的？
+
+1. HTTP/2没有在URI里引入新的协议名，仍然用`http://`表示明文协议，用`https://`表明加密协议，于是只需要浏览器和服务器在背后自动升级协议，这样可以让用户意识不到协议的升级，很好地实现了协议的平滑升级
+2. 只在应用层做了改变，还是基于TCP协议传输，应用层方面为了保持功能上的兼容，HTTP/2把HTTP分解成了`语义`和`语法`两个部分，`语义`层不做修改，与HTTP/1.1完全一致，比如请求方法、状态码、头字段等规则保留不变。但是，HTTP/2在`语法`层面做了很多改造，基本改变了HTTP报文的传输格式
+
+
+
+#### 2.6.3 头部压缩
+
+![image-20230730161130192](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730161130192.png)
+
+
+
+**静态表编码**
+
+HTTP/2为高频出现在头部的字符串和字段建立了一张静态表，它是写入到HTTP/2框架里的，不会变化的，静态表里共有61组，如下：
+
+![img](https://camo.githubusercontent.com/fc9933adbf417e813375a55bad191a445a9ff04166269d75ba084b75823c3991/68747470733a2f2f63646e2e7869616f6c696e636f64696e672e636f6d2f67682f7869616f6c696e636f6465722f496d616765486f737434406d61696e2f2545372542442539312545372542422539432f68747470322f2545392539442539392545362538302538312545382541312541382e706e67)
+
+![image-20230730161407702](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730161407702.png)
+
+![image-20230730161704201](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730161704201.png)
+
+![image-20230730161908348](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730161908348.png)
+
+![img](https://camo.githubusercontent.com/66f54143bf0f8d4fa96b649bcffe64f8df59bf042f3772d079d47d5496040f96/68747470733a2f2f63646e2e7869616f6c696e636f64696e672e636f6d2f67682f7869616f6c696e636f6465722f496d616765486f737434406d61696e2f2545372542442539312545372542422539432f68747470322f6e6768747470782e706e67)
+
+![image-20230730162010474](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162010474.png)
+
+
+
+**动态表编码**
+
+![image-20230730162113682](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162113682.png)
+
+![img](https://camo.githubusercontent.com/70960859f8efdc1f4f20113842a7b1175a359fbc1774e1803271a90cec97f8da/68747470733a2f2f63646e2e7869616f6c696e636f64696e672e636f6d2f67682f7869616f6c696e636f6465722f496d616765486f737434406d61696e2f2545372542442539312545372542422539432f68747470322f2545352541342542342545392538332541382545372542432539362545372541302538312e706e67)
+
+
+
+#### 2.6.4 二进制帧
+
+![image-20230730162246364](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162246364.png)
+
+![image-20230730162324266](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162324266.png)
+
+![image-20230730162333725](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162333725.png)
+
+![image-20230730162435315](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162435315.png)
+
+![image-20230730162608971](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162608971.png)
+
+
+
+#### 2.6.5 并发传输
+
+![image-20230730162807211](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162807211.png)
+
+![img](https://camo.githubusercontent.com/eac74b0353c82f43301e48df402dceba83c7cfc652cc1160e62cba22b08042df/68747470733a2f2f63646e2e7869616f6c696e636f64696e672e636f6d2f67682f7869616f6c696e636f6465722f496d616765486f737434406d61696e2f2545372542442539312545372542422539432f68747470322f73747265616d2e706e67)
+
+![image-20230730162902625](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730162902625.png)
+
+![img](https://camo.githubusercontent.com/128362dd941849f0b1f34f32e80d8ca2c4c1fdb2cb454be65adc99da2c94470b/68747470733a2f2f63646e2e7869616f6c696e636f64696e672e636f6d2f67682f7869616f6c696e636f6465722f496d616765486f737434406d61696e2f2545372542442539312545372542422539432f68747470322f73747265616d322e706e67)
+
+![image-20230730163115704](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163115704.png)
+
+![img](https://camo.githubusercontent.com/dbc0b26395aeefa91d48c1e7dc38d2497096e62e2e6e2e816e9a5caba039c5f6/68747470733a2f2f696d672d626c6f672e6373646e696d672e636e2f38333434353538316461666534303964386366643263353733623237383161632e706e67)
+
+![image-20230730163224776](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163224776.png)
+
+
+
+#### 2.6.6 服务器主动推送资源
+
+![image-20230730163337962](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163337962.png)
+
+![image-20230730163355352](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163355352.png)
+
+![image-20230730163413217](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163413217.png)
+
+![img](https://camo.githubusercontent.com/0c97615e843d3d76e7b1c152848d479b39927c79d983fdb0610980bdcf0632fb/68747470733a2f2f63646e2e7869616f6c696e636f64696e672e636f6d2f67682f7869616f6c696e636f6465722f496d616765486f737434406d61696e2f2545372542442539312545372542422539432f68747470322f70757368322e706e67)
+
+![image-20230730163447910](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163447910.png)
+
+
+
+#### 2.6.7 总结
+
+![image-20230730163555825](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163555825.png)
+
+![image-20230730163621010](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163621010.png)
