@@ -1952,3 +1952,71 @@ HTTP/2为高频出现在头部的字符串和字段建立了一张静态表，�
 ![image-20230730163555825](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163555825.png)
 
 ![image-20230730163621010](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230730163621010.png)
+
+
+
+### 2.7 HTTP/3强势来袭
+
+#### 2.7.1 美中不足的HTTP/2
+
+![image-20230802162201331](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802162201331.png)
+
+
+
+**队头堵塞**
+
+![image-20230802162302296](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802162302296.png)
+
+![image-20230802162350490](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802162350490.png)
+
+
+
+**TCP与TLS的握手时延迟**
+
+![image-20230802162614761](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802162614761.png)
+
+
+
+**网络迁移需要重新连接**
+
+![image-20230802162800996](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802162800996.png)
+
+
+
+#### 2.7.2 QUIC协议的特点
+
+![image-20230802162849284](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802162849284.png)
+
+**无队头阻塞**
+
+![image-20230802163010296](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802163010296.png)
+
+QUIC连接上的多个Stream之间都是独立的，但是某个流中的数据包丢了，即使该流的其他数据包到达了，数据也无法被HTTP/3获取
+
+
+
+**更快的连接建立**
+
+![image-20230802163330838](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802163330838.png)
+
+![img](https://camo.githubusercontent.com/c10cd44d6a90ef3190b4cb138dd18303c8035476eff7b2976bccb336a0797610/68747470733a2f2f63646e2e7869616f6c696e636f64696e672e636f6d2f67682f7869616f6c696e636f6465722f496d616765486f737434406d61696e2f2545372542442539312545372542422539432f68747470332f302d7274742e676966)
+
+
+
+**连接迁移**
+
+![image-20230802163646084](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802163646084.png)
+
+
+
+#### 2.7.3 HTTP/3协议
+
+![image-20230802163820945](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802163820945.png)
+
+![image-20230802163913676](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802163913676.png)
+
+
+
+#### 2.7.4 总结
+
+![image-20230802164030632](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802164030632.png)
