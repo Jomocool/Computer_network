@@ -2020,3 +2020,187 @@ QUIC连接上的多个Stream之间都是独立的，但是某个流中的数据�
 #### 2.7.4 总结
 
 ![image-20230802164030632](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230802164030632.png)
+
+
+
+### 2.8 既然有HTTP协议，为什么还要有RPC？
+
+#### 2.8.1 从TCP聊起
+
+![image-20230803222419904](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803222419904.png)
+
+![握手建立连接流程](https://cdn.xiaolincoding.com//mysql/other/23cc66a7f4cb06afe13842b4b339e28b.gif)
+
+建立连接后，可以使用`send()`发送数据，`recv()`接收数据
+
+但是仅凭这样一个纯裸的TCP连接，虽然可以做到收发数据了，但是会有问题
+
+
+
+#### 2.8.2 使用纯裸TCP会有什么问题
+
+TCP有三个特点，`面向连接、可靠、基于字节流`
+
+![TCP 是什么](https://cdn.xiaolincoding.com//mysql/other/3fcad07ba7ae92299b32224da8583363.png)
+
+
+
+字节流可以理解为一个双向的通道里流淌的数据，这个数据就是常说的二进制数据。纯裸TCP收发的这些01串之间是没有任何边界的，所以根本无法知道哪个地方才算一条完整消息
+
+![01 二进制字节流](https://cdn.xiaolincoding.com//mysql/other/254d845f9de05c19536d8343d268595a.png)
+
+![image-20230803225616578](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803225616578.png)
+
+![消息边界长度标志](https://cdn.xiaolincoding.com//mysql/other/9428feed1ff22156fc136d17a129527b.png)
+
+![image-20230803225717417](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803225717417.png)
+
+
+
+#### 2.8.3 HTTP和RPC
+
+![四层网络协议](https://cdn.xiaolincoding.com//mysql/other/da970d16a205fb48d6a8bea14498814d.png)
+
+`TCP是传输层的协议`，而基于TCP造出来的HTTP和各类RPC协议，它们都只是定义了不同消息格式的`应用层协议`而已
+
+![image-20230803225926810](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803225926810.png)
+
+![image-20230803225954619](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803225954619.png)
+
+![image-20230803230025787](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803230025787.png)
+
+
+
+> 既然有HTTP协议，为什么还要有RPC？
+
+![image-20230803230111045](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803230111045.png)
+
+
+
+> 那既然有RPC了，为什么还要有HTTP呢？
+
+![image-20230803230259132](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803230259132.png)
+
+
+
+#### 2.8.4 HTTP和RPC有什么区别
+
+- **服务发现**（找到服务对应的IP端口的过程）
+
+  ![image-20230803230638554](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803230638554.png)
+
+- **底层连接形式**
+
+  ![image-20230803230901855](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803230901855.png)
+
+- **传输的内容**
+
+  ![image-20230803231033339](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803231033339.png)
+
+  ![image-20230803231131043](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803231131043.png)
+
+  ![image-20230803231244105](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803231244105.png)
+
+  ![HTTP 原理](https://cdn.xiaolincoding.com//mysql/other/f4cef7331cabcfe56d9d6434f7ef907f.png)
+
+  ![RPC 原理](https://cdn.xiaolincoding.com//mysql/other/12244fb0b19b2e61755fcab799198f68.png)
+
+  ![image-20230803231346522](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803231346522.png)
+
+
+
+#### 2.8.5 总结
+
+![image-20230803231508522](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230803231508522.png)
+
+
+
+### 2.9 既然有HTTP协议，为什么还要有WebSocket？
+
+**问题：**`看起来服务器主动发消息给客户端的场景`，是怎么做到的？
+
+#### 2.9.1 使用HTTP不断轮询
+
+![image-20230805232651498](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805232651498.png)
+
+![image-20230805232723515](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805232723515.png)
+
+
+
+#### 2.9.2 长轮询
+
+![image-20230805232823011](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805232823011.png)
+
+![image-20230805232841965](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805232841965.png)
+
+![image-20230805232932494](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805232932494.png)
+
+
+
+#### 2.9.3 WebSocket是什么
+
+![image-20230805233059522](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233059522.png)
+
+![图片](https://cdn.xiaolincoding.com//mysql/other/3bbe4c5db972513f912d30ba8cbddd65.png)
+
+
+
+**怎么建立WebSocket连接**
+
+![image-20230805233243208](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233243208.png)
+
+![image-20230805233305927](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233305927.png)
+
+![image-20230805233321186](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233321186.png)
+
+![image-20230805233336963](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233336963.png)
+
+
+
+**WebSocket抓包**
+
+用wireshark抓个包，实际看下数据包的情况
+
+![图片](https://cdn.xiaolincoding.com//mysql/other/f756ca625523f0f9d40a402465179bbe.png)
+
+![image-20230805233453989](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233453989.png)
+
+![图片](https://cdn.xiaolincoding.com//mysql/other/82d65f08dad05e6b537ea06b94224a5f.png)
+
+![image-20230805233534684](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233534684.png)
+
+![图片](https://cdn.xiaolincoding.com//mysql/other/382c7699530ea7e7b22f60bb68af21bd.png)
+
+![image-20230805233806679](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233806679.png)
+
+
+
+**WebSocket的消息格式**
+
+![image-20230805233859019](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233859019.png)
+
+![image-20230805233913710](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805233913710.png)
+
+![image-20230805234039902](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805234039902.png)
+
+![image-20230805234122527](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805234122527.png)
+
+![image-20230805234202866](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805234202866.png)
+
+![image-20230805234229833](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805234229833.png)
+
+![image-20230805234314971](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805234314971.png)
+
+![image-20230805234332253](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805234332253.png)
+
+
+
+**WebSocket的使用场景**
+
+![image-20230805234403625](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805234403625.png)
+
+
+
+#### 2.9.4 总结
+
+![image-20230805234516202](https://md-jomo.oss-cn-guangzhou.aliyuncs.com/IMG/image-20230805234516202.png)
